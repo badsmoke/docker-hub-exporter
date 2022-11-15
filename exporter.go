@@ -82,7 +82,7 @@ func New(organisations, images []string, connectionRetries int, opts ...Option) 
 
 	e.logger.Printf("Organisations to monitor: %v", e.organisations)
 	e.logger.Printf("Images to monitor: %v", e.images)
-
+	e.logger.Println("start")
 	return e
 }
 
