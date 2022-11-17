@@ -1,4 +1,4 @@
-package docker_hub_exporter
+package exporter
 
 import (
 	"encoding/json"
@@ -32,11 +32,11 @@ var (
 		"docker_hub_exporter: Docker Image Stars.",
 		[]string{"image", "user"}, nil,
 	)
-	dockerHubImageIsAutomated = prometheus.NewDesc(
+	/*dockerHubImageIsAutomated = prometheus.NewDesc(
 		prometheus.BuildFQName(Namespace, "", "is_automated"),
 		"docker_hub_exporter: Docker Image Is Automated.",
 		[]string{"image", "user"}, nil,
-	)
+	)*/
 )
 
 // Exporter is used to store Metrics data
@@ -57,14 +57,37 @@ type OrganisationResult struct {
 }
 
 type ImageResult struct {
-	Name        string    `json:"name"`
-	User        string    `json:"user"`
-	StarCount   float64   `json:"star_count"`
-	IsAutomated bool      `json:"is_automated"`
-	PullCount   float64   `json:"pull_count"`
-	LastUpdated time.Time `json:"last_updated"`
+	Name           string    `json:"name"`
+	Namespace      string    `json:"namespace"`
+	RepositoryType string    `json:"repository_type"`
+	Status         int       `json:"status"`
+	IsPrivate      bool      `json:"is_private"`
+	StarCount      int       `json:"star_count"`
+	PullCount      int       `json:"pull_count"`
+	LastUpdated    time.Time `json:"last_updated"`
+	DateRegistered time.Time `json:"date_registered"`
+	Affiliation    string    `json:"affiliation"`
+	MediaTypes     []string  `json:"media_types"`
 }
 
+type responseBody struct {
+	Count    int         `json:"count"`
+	Next     interface{} `json:"next"`
+	Previous string      `json:"previous"`
+	Results  []struct {
+		Name           string    `json:"name"`
+		Namespace      string    `json:"namespace"`
+		RepositoryType string    `json:"repository_type"`
+		Status         int       `json:"status"`
+		IsPrivate      bool      `json:"is_private"`
+		StarCount      float64       `json:"star_count"`
+		PullCount      float64       `json:"pull_count"`
+		LastUpdated    time.Time `json:"last_updated"`
+		DateRegistered time.Time `json:"date_registered"`
+		Affiliation    string    `json:"affiliation"`
+		MediaTypes     []string  `json:"media_types"`
+	} `json:"results"`
+}
 // New creates a new Exporter and returns it
 func New(organisations, images []string, connectionRetries int, opts ...Option) *Exporter {
 	e := &Exporter{
@@ -82,7 +105,8 @@ func New(organisations, images []string, connectionRetries int, opts ...Option) 
 
 	e.logger.Printf("Organisations to monitor: %v", e.organisations)
 	e.logger.Printf("Images to monitor: %v", e.images)
-	e.logger.Println("start")
+	e.logger.Println("start exporter")
+
 	return e
 }
 
@@ -105,7 +129,7 @@ func (e Exporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- dockerHubImageLastUpdated
 	ch <- dockerHubImagePullsTotal
 	ch <- dockerHubImageStars
-	ch <- dockerHubImageIsAutomated
+	//ch <- dockerHubImageIsAutomated
 }
 
 // Collect implements the prometheus.Collector interface.
@@ -118,20 +142,26 @@ func (e Exporter) Collect(ch chan<- prometheus.Metric) {
 func (e Exporter) collectMetrics(ch chan<- prometheus.Metric) {
 	wg := sync.WaitGroup{}
 	wg.Add(len(e.organisations) + len(e.images))
+	e.logger.Println(e.images)
+	e.logger.Println("get metrics")
 
 	for _, url := range e.organisations {
 		go func(url string) {
 			if url != "" {
 				response, err := e.getOrgMetrics(fmt.Sprintf("%s%s", e.baseURL, url))
+				
+				
 
 				if err != nil {
 					e.logger.Println("error ", err)
 					wg.Done()
 					return
-				}
+				} 
 
 				for _, orgResp := range response {
+
 					for _, result := range orgResp.Results {
+						
 						e.processImageResult(result, ch)
 					}
 				}
@@ -163,20 +193,17 @@ func (e Exporter) collectMetrics(ch chan<- prometheus.Metric) {
 }
 
 func (e Exporter) processImageResult(result ImageResult, ch chan<- prometheus.Metric) {
-	if result.Name != "" && result.User != "" {
-		var isAutomated float64
-		if result.IsAutomated {
-			isAutomated = float64(1)
-		} else {
-			isAutomated = float64(0)
-		}
+	if result.Name != "" && result.Namespace != "" {
+		
 
 		lastUpdated := float64(result.LastUpdated.UnixNano()) / 1e9
+		starCounter := float64(result.StarCount)
+		pullCounter := float64(result.PullCount)
 
-		ch <- prometheus.MustNewConstMetric(dockerHubImageStars, prometheus.GaugeValue, result.StarCount, result.Name, result.User)
-		ch <- prometheus.MustNewConstMetric(dockerHubImageIsAutomated, prometheus.GaugeValue, isAutomated, result.Name, result.User)
-		ch <- prometheus.MustNewConstMetric(dockerHubImagePullsTotal, prometheus.CounterValue, result.PullCount, result.Name, result.User)
-		ch <- prometheus.MustNewConstMetric(dockerHubImageLastUpdated, prometheus.GaugeValue, lastUpdated, result.Name, result.User)
+		ch <- prometheus.MustNewConstMetric(dockerHubImageStars, prometheus.GaugeValue, starCounter, result.Name, result.Namespace)
+		//ch <- prometheus.MustNewConstMetric(dockerHubImageIsAutomated, prometheus.GaugeValue, isAutomated, result.Name, result.User)
+		ch <- prometheus.MustNewConstMetric(dockerHubImagePullsTotal, prometheus.CounterValue, pullCounter, result.Name, result.Namespace)
+		ch <- prometheus.MustNewConstMetric(dockerHubImageLastUpdated, prometheus.GaugeValue, lastUpdated, result.Name, result.Namespace)
 	}
 }
 
@@ -199,18 +226,23 @@ func (e Exporter) getImageMetrics(url string) (ImageResult, error) {
 func (e Exporter) getOrgMetrics(url string) ([]OrganisationResult, error) {
 	orgResult := OrganisationResult{}
 
+
+	
+
 	body, err := e.getResponse(url)
+
+
 	if err != nil {
 		return []OrganisationResult{}, err
 	}
 
 	err = json.Unmarshal(body, &orgResult)
 	if err != nil {
-		return []OrganisationResult{}, fmt.Errorf("Error unmarshalling response: %v", err)
+		return []OrganisationResult{} , fmt.Errorf("Error unmarshalling response: %v", err)
 	}
 
 	if orgResult.Count == 0 || len(orgResult.Results) == 0 {
-		return []OrganisationResult{}, fmt.Errorf("No images found for url: %s", url)
+		return []OrganisationResult{} , fmt.Errorf("No images found for url: %s", url)
 	}
 
 	if orgResult.Next != "" {
